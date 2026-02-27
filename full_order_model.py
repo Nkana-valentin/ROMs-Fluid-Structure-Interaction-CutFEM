@@ -1,7 +1,3 @@
-"""
-Encapsulated CutFEM Fluid-Structure Interaction Solver
-Based on original code by H. v. Wahl (20.08.2020, updated 21.09.2020)
-"""
 from netgen.geom2d import SplineGeometry
 from ngsolve import *
 from xfem import *
@@ -17,20 +13,20 @@ import os
 
 class CutFEMProblem:
     """
-    Main CutFEM problem class for fluid-structure interaction
-    __author__ = H. v. Wahl
-    __date__ = 20.08.2020
-    __update__ = 21.09.2020
-    Non-stationary test case considered in Wahl, Richter, Frei. The 
-    motion of the ball is prescribed analytically.
-    Rewritten by Valentin Nkana Ngan for improved modularity, readability and functionality
-    for reduced order modeling and POD applications.
-    """
+        Main CutFEM problem class for fluid-structure interaction (FSI).
+        Designed for data generation and reduced order modeling (ROM) with POD.
+
+        Original Author: H. v. Wahl
+        Dates: 20.08.2020 - 21.09.2020 (Non-stationary test case with prescribed ball motion)
+
+        Rewritten by: Valentin Nkana Ngan
+        Date: 2026-02-22
+        Purpose: Improved modularity, readability, and functionality for ROM and POD applications.
+        """
     
     def __init__(self, args=None):
         """
         Initialize the CutFEM problem with given command line arguments
-        
         Parameters:
         -----------
         args : argparse.Namespace
@@ -223,7 +219,7 @@ class CutFEMProblem:
         p1, p2, p3, p4, p5, p6 = [geo.AppendPoint(*pnt) for pnt in pnts]
         
         geo.Append(["line", p1, p2], leftdomain=2, rightdomain=0, bc="wall", 
-                   maxh=self.h_max / self.bottom_factor)
+                maxh=self.h_max / self.bottom_factor)
         geo.Append(["line", p2, p3], leftdomain=1, rightdomain=0, bc="wall")
         geo.Append(["line", p3, p4], leftdomain=1, rightdomain=0, bc="wall")
         geo.Append(["line", p4, p5], leftdomain=1, rightdomain=0, bc="slip")
@@ -246,7 +242,7 @@ class CutFEMProblem:
         Build finite element spaces
         """
         self.V = VectorH1(self.mesh, order=self.k, 
-                          dirichletx="wall", dirichlety="wall|slip")
+                        dirichletx="wall", dirichlety="wall|slip")
         self.Q = H1(self.mesh, order=self.k - 1)
         self.X = FESpace([self.V, self.Q], dgjumps=True)
         self.free_dofs = BitArray(self.X.ndof)
@@ -312,13 +308,13 @@ class CutFEMProblem:
             CheckElementHistory(it, self.mesh.ne, self.els["hasneg"], self.els["act_old"])
         elif bdf == 2:
             CheckElementHistory(it, self.mesh.ne, self.els["hasneg"], 
-                               self.els["act_old"], self.els["act_old2"])
+                            self.els["act_old"], self.els["act_old2"])
         else:
             raise SyntaxError("Unimplemented BDF scheme requested")
         
         # Extension elements
         delta = 2 * max(abs(self._v1(self.t.Get())),
-                       abs(self._v1(self.t.Get() + self.dt)),
+                    abs(self._v1(self.t.Get() + self.dt)),
                        abs(self._v1(self.t.Get() + 2 * self.dt))) * self.dt
         
         InterpolateToP1(self._levelset_func(self._d1(self.t)) + delta, self.lsetp1_ext)
@@ -339,18 +335,18 @@ class CutFEMProblem:
         
         # Ghost-penalty facets
         UpdateMarkers(self.facets["gp_ext"],
-                     GetFacetsWithNeighborTypes(self.mesh, a=self.els["active"],
-                                               b=self.els["ext"], use_and=True))
+                    GetFacetsWithNeighborTypes(self.mesh, a=self.els["active"],
+                                            b=self.els["ext"], use_and=True))
         UpdateMarkers(self.facets["gp_stab"],
-                     GetFacetsWithNeighborTypes(self.mesh, a=self.els["hasneg"], 
-                                               b=self.els["if"], use_and=True))
+                    GetFacetsWithNeighborTypes(self.mesh, a=self.els["hasneg"], 
+                                            b=self.els["if"], use_and=True))
         UpdateMarkers(self.facets["active"], self.facets["gp_ext"] | self.facets["gp_stab"])
         
         # Update degrees of freedom
         UpdateMarkers(self.free_dofs,
-                     CompoundBitArray([GetDofsOfElements(self.V, self.els["active"]),
-                                      GetDofsOfElements(self.Q, self.els["hasneg"])]),
-                     self.X.FreeDofs())
+                    CompoundBitArray([GetDofsOfElements(self.V, self.els["active"]),
+                                    GetDofsOfElements(self.Q, self.els["hasneg"])]),
+                self.X.FreeDofs())
     
     # ----------------------------- (BI)LINEAR FORMS ------------------------------
     def _setup_forms(self):
@@ -411,26 +407,26 @@ class CutFEMProblem:
         # -------------------------------- INTEGRATORS --------------------------------
         def InnerBFI(form, **kwargs):
             return (SymbolicBFI(self.lset_neg, 
-                               form=form.Compile(self.compile_flag, wait=self.wait_compile),
+                            form=form.Compile(self.compile_flag, wait=self.wait_compile),
                                **kwargs), "inner")
         
         def BoundaryBFI(form, **kwargs):
             return (SymbolicBFI(self.lset_if, 
-                               form=form.Compile(self.compile_flag, wait=self.wait_compile),
+                            form=form.Compile(self.compile_flag, wait=self.wait_compile),
                                **kwargs), "boundary")
         
         def GhostPenaltyBFI(form, **kwargs):
             return (SymbolicFacetPatchBFI(form=form.Compile(self.compile_flag, wait=self.wait_compile),
-                                         skeleton=False), kwargs["domain"])
+                                        skeleton=False), kwargs["domain"])
         
         def InnerLFI(form, **kwargs):
             return (SymbolicLFI(self.lset_neg, 
-                               form=form.Compile(self.compile_flag, wait=self.wait_compile),
+                            form=form.Compile(self.compile_flag, wait=self.wait_compile),
                                **kwargs), "inner")
         
         def BoundaryLFI(form, **kwargs):
             return (SymbolicLFI(self.lset_if, 
-                               form=form.Compile(self.compile_flag, wait=self.wait_compile),
+                            form=form.Compile(self.compile_flag, wait=self.wait_compile),
                                **kwargs), "boundary")
         
         # Store integrator lists
@@ -477,10 +473,10 @@ class CutFEMProblem:
         
         # Store integrator markers
         self.integrator_markers = {"inner": self.els["hasneg"],
-                                   "boundary": self.els["if"],
-                                   "facets_ext": self.facets["gp_ext"],
-                                   "facets_if": self.facets["gp_stab"],
-                                   "bottom": None}
+                                "boundary": self.els["if"],
+                                "facets_ext": self.facets["gp_ext"],
+                                "facets_if": self.facets["gp_stab"],
+                                "bottom": None}
         
         self.els_restr = {"elements": self.els["active"], "facet": self.facets["active"]}
     
@@ -499,8 +495,8 @@ class CutFEMProblem:
         Compute drag forces
         """
         a = RestrictedBilinearForm(self.X, element_restriction=self.els["if"],
-                                   facet_restriction=self.facets["none"],
-                                   check_unused=False)
+                                facet_restriction=self.facets["none"],
+                                check_unused=False)
         a += SymbolicBFI(self.lset_if, form=InnerProduct(self.stress, self.v),
                         definedonelements=self.els["if"])
         a.Apply(self.gfu.vec, self.res)
@@ -524,7 +520,7 @@ class CutFEMProblem:
             if not os.path.isdir(self.vtk_dir):
                 os.makedirs(self.vtk_dir)
             self.vtk = VTKOutput(ma=self.mesh, 
-                                 coefs=[self.vel, self.pre, self.lsetp1, self.deformation],
+                                coefs=[self.vel, self.pre, self.lsetp1, self.deformation],
                                 names=["velocity", "pressure", "lset", "deformation"],
                                 filename=self.vtk_dir + self.vtk_file, 
                                 subdivision=self.vtk_subdiv)
@@ -636,9 +632,9 @@ class CutFEMProblem:
                 f.Assemble()
                 
                 CutFEM_QuasiNewton(a=mStar, alin=mStar_lin, u=self.gfu, f=f.vec,
-                                  freedofs=self.free_dofs, maxit=self.maxit_newt,
-                                  maxerr=self.tol_newt, inverse=self.inverse,
-                                  jacobi_update_tol=self.jacobi_tol_newt, reuse=False)
+                                freedofs=self.free_dofs, maxit=self.maxit_newt,
+                                maxerr=self.tol_newt, inverse=self.inverse,
+                                jacobi_update_tol=self.jacobi_tol_newt, reuse=False)
                 
                 self._compute_drag()
                 self._store_snapshot()
@@ -648,8 +644,8 @@ class CutFEMProblem:
                 #Redraw(blocking=True)
                 
                 print("t = {:10.6f}, height = {:6.4f}, vel_ball = {:5.3f} active_els"
-                      " = {:} - 1".format(self.t.Get(), self._d1(self.t.Get()), 
-                                         self._v1(self.t.Get()), sum(self.els["active"])))
+                    " = {:} - 1".format(self.t.Get(), self._d1(self.t.Get()), 
+                                        self._v1(self.t.Get()), sum(self.els["active"])))
             
             # VTK output for BDF1 if needed
             if self.vtk_out and (1 * self.vtk_freq) % self.dt_inv == 0:
@@ -692,9 +688,9 @@ class CutFEMProblem:
                 f.Assemble()
                 
                 CutFEM_QuasiNewton(a=mStar, alin=mStar_lin, u=self.gfu, f=f.vec,
-                                  freedofs=self.free_dofs, maxit=self.maxit_newt,
-                                  maxerr=self.tol_newt, inverse=self.inverse,
-                                  jacobi_update_tol=self.jacobi_tol_newt, reuse=False)
+                                freedofs=self.free_dofs, maxit=self.maxit_newt,
+                                maxerr=self.tol_newt, inverse=self.inverse,
+                                jacobi_update_tol=self.jacobi_tol_newt, reuse=False)
                 
                 self._compute_drag()
                 self._store_snapshot()
@@ -710,8 +706,8 @@ class CutFEMProblem:
                     self.vtk.Do()
                 
                 print("t = {:10.6f}, height = {:6.4f}, vel_ball = {:5.3f} active_els"
-                      " = {:}".format(self.t.Get(), self._d1(self.t.Get()), 
-                                     self._v1(self.t.Get()), sum(self.els["active"])))
+                    " = {:}".format(self.t.Get(), self._d1(self.t.Get()), 
+                                    self._v1(self.t.Get()), sum(self.els["active"])))
     
     # ------------------------------ POST-PROCESSING ------------------------------
     def print_execution_time(self):
@@ -723,7 +719,7 @@ class CutFEMProblem:
               " ----------".format(end_time // (24 * 60 * 60),
                                    end_time % (24 * 60 * 60) // (60 * 60),
                                    end_time % 3600 // 60,
-                                   end_time % 60))
+                                end_time % 60))
     
     # ------------------------------ POD-RELATED METHODS ------------------------------
     def enable_snapshot_collection(self, stride=1):
