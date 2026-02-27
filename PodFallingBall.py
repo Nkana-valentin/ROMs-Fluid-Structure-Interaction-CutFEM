@@ -3,14 +3,13 @@ from full_order_model import CutFEMProblem
 from ngsolve import *
 from xfem import *
 import pickle
-import argparse
 #from pathlib import Path
 import os
 import time
 import numpy as np
 
 
-class CutFEMProblemWithPOD(CutFEMProblem):
+class POD(CutFEMProblem):
     """
     Extended CutFEM problem class with POD capabilities
     """
@@ -52,6 +51,12 @@ class CutFEMProblemWithPOD(CutFEMProblem):
         """
         h = specialcf.mesh_size
         
+        # Get parameters
+        nu = self.viscosity_dyn   # kinematic viscosity
+        rho = self.density_fl     # density
+        gamma_n = self.gamma_n    # Nitsche penalty parameter
+        k = self.k                # polynomial order
+        
         # Velocity inner product using SymbolicBFI (handles cut elements correctly)
         u = self.V.TrialFunction()
         v = self.V.TestFunction()
@@ -59,37 +64,28 @@ class CutFEMProblemWithPOD(CutFEMProblem):
         # Use BilinearForm instead of RestrictedBilinearForm for SymbolicBFI
         inner_u = BilinearForm(self.V)
         
+        # BDF2 mass term coefficient
+        inner_u += SymbolicBFI(self.lset_neg, form=u * v)
+        
         # Add terms using SymbolicBFI for cut domain
         inner_u += SymbolicBFI(self.lset_neg, form=InnerProduct(Grad(u), Grad(v)))
-        inner_u += SymbolicBFI(self.lset_neg, form=u * v)
+        
         # Interface terms (Γ = zero level set)
-        inner_u += SymbolicBFI(self.lset_if, form=-(Grad(u) * self.n_lset) * v)      # -(∂n u, v)_Γ
-        inner_u += SymbolicBFI(self.lset_if, form=-u * (Grad(v) * self.n_lset))      # -(u, ∂n v)_Γ
-        inner_u += SymbolicBFI(self.lset_if, form=(self.gamma_n / h) * u * v)        # Nitsche penalty
+        inner_u += SymbolicBFI(self.lset_if, form=-(Grad(u) * self.n_lset) * v)       # -(∂n u, v)_Γ
+        inner_u += SymbolicBFI(self.lset_if, form=- u * (Grad(v) * self.n_lset))      # -(u, ∂n v)_Γ
+        inner_u += SymbolicBFI(self.lset_if, form=gamma_n / h * u * v)                # Nitsche penalty
+        
         # Ghost penalty on cut facets (if needed)
         inner_u += SymbolicBFI (self.gamma_n * self.viscosity_dyn / h**2 * (u - u.Other()) * (v - v.Other()), BND, skeleton=True)
-        #inner_u += SymbolicBFI(form=InnerProduct(u, v))
-        #inner_u += self.gamma_n * self.viscosity_dyn / h**2 * (u - u.Other()) * (v - v.Other()) * dx(skeleton=True) # doesn't work
-        #print("Created velocity inner product with SymbolicBFI")
-        # Add ghost penalty on facets (use SymbolicFacetPatchBFI like in solver)
-        # if hasattr(self, 'gamma_n'):
-        #     h = specialcf.mesh_size
-        #     facets = GetFacetsWithNeighborTypes(self.mesh,self.els["hasneg"],self.els["if"])
-        #     dw = dFacetPatch(definedonelements=facets)
-        #     inner_u += self.gamma_n * self.viscosity_dyn / h**2 * (u - u.Other())*(v - v.Other())*dw
-            # inner_u += SymbolicFacetPatchBFI(
-            #     form=(self.gamma_n * self.viscosity_dyn / h**2 * 
-            #         (u - u.Other()) * (v - v.Other())).Compile(True, wait=True),
-            #     skeleton=False) # doesn't work
-            
-        #print("Assembling velocity inner product...")   
         inner_u.Assemble()
         
         # Pressure inner product
         p = self.Q.TrialFunction()
         q = self.Q.TestFunction()
         
+        # Use BilinearForm instead of RestrictedBilinearForm for SymbolicBFI
         inner_p = BilinearForm(self.Q)
+        
         # L2 norm over fluid domain
         inner_p += SymbolicBFI(self.lset_neg, form=p * q)
         
@@ -97,7 +93,7 @@ class CutFEMProblemWithPOD(CutFEMProblem):
         inner_p += SymbolicBFI(self.lset_neg, form=InnerProduct(Grad(p), Grad(q)))
         
         # Optional: Pressure ghost penalty for cut elements
-        inner_p += SymbolicBFI(self.gamma_s / self.viscosity_dyn / h**2 * (p - p.Other()) * (q - q.Other()), BND, skeleton=True)
+        inner_p += SymbolicBFI(self.gamma_s / nu / h**2 * (p - p.Other()) * (q - q.Other()), BND, skeleton=True)
         
         # Adding pressure regularization (if needed)
         if hasattr(self, 'pReg'):
@@ -114,8 +110,7 @@ class CutFEMProblemWithPOD(CutFEMProblem):
         Parameters:
         -----------
         num_modes : int, optional
-            Number of modes to retain
-            
+            Number of modes to retain  
         Returns:
         --------
         dict: POD modes and energies
@@ -270,16 +265,13 @@ class CutFEMProblemWithPOD(CutFEMProblem):
                 'diam_ball': self.diam_ball
             }
         }
-        # print(f"Saving POD basis with {len(self.pod_velocity_modes)} velocity modes and "
-        #       f"{len(self.pod_pressure_modes)} pressure modes to {filename}...")    
-        #print(f"pod_data keys: {pod_data['velocity_modes']}, {pod_data['pressure_modes']}, ")
+    
         with open(filename, 'wb') as f:
             pickle.dump(pod_data, f)
         
         print(f"Saved POD basis to {filename}")
         
         # Also save VTK visualization of modes
-        #print(f"len velocity modes: {len(self.pod_velocity_modes)}, len pressure modes: {len(self.pod_pressure_modes)}")
         if len(self.pod_velocity_modes) > 0:
             vtk_dir = self.pod_dir + 'vtk_modes/'
             if not os.path.isdir(vtk_dir):
@@ -338,7 +330,7 @@ class CutFEMProblemWithPOD(CutFEMProblem):
         self.pod_pressure_energies = pod_data['pressure_energies']
         
         print(f"Loaded POD basis with {len(self.pod_velocity_modes)} velocity modes "
-              f"and {len(self.pod_pressure_modes)} pressure modes")
+            f"and {len(self.pod_pressure_modes)} pressure modes")
     
     def plot_energy_decay(self, save=True, show=False):
         """
@@ -466,66 +458,3 @@ class CutFEMProblemWithPOD(CutFEMProblem):
         }
 
 
-# -------------------------------- MAIN SCRIPT --------------------------------
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='CutFEM FSI with optional POD')
-    parser.add_argument("--h", help="h_max", type=float, required=True)
-    parser.add_argument("--dti", help="dt_inv", type=float, required=True)
-    parser.add_argument("--pod", action="store_true", help="Compute POD after simulation")
-    parser.add_argument("--num_modes", type=int, default=20, help="Number of POD modes")
-    parser.add_argument("--snapshot_stride", type=int, default=1, help="Store every N time steps")
-    parser.add_argument("--load_snapshots", type=str, help="Load snapshots from file instead of simulating")
-    parser.add_argument("--load_pod", type=str, help="Load POD basis from file")
-    parser.add_argument("--no_vtk", action="store_true", help="Disable VTK output")
-    
-    args = parser.parse_args()
-    print(args)
-    
-    if args.pod or args.load_snapshots or args.load_pod:
-        # Use POD-enabled version
-        if args.no_vtk:
-            # Need to modify after creation
-            problem = CutFEMProblemWithPOD(args, collect_snapshots=(args.load_snapshots is None))
-            problem.vtk_out = False
-        else:
-            problem = CutFEMProblemWithPOD(args, collect_snapshots=(args.load_snapshots is None))
-        
-        if args.load_snapshots:
-            # Load existing snapshots
-            problem.load_snapshots(args.load_snapshots)
-            
-            if args.load_pod:
-                # Load existing POD basis
-                problem.load_pod_basis(args.load_pod)
-            else:
-                # Compute POD from loaded snapshots
-                problem.compute_pod(num_modes=args.num_modes)
-                problem.save_pod_basis()
-                problem.plot_energy_decay()
-        
-        elif args.pod:
-            # Run full pipeline
-            results = problem.run_full_pipeline(num_modes=args.num_modes)
-            
-            # Print final drag values
-            print("\nFinal drag values:")
-            if len(results['history']['drag_x']) > 0:
-                print(f"  Drag X: {results['history']['drag_x'][-1]:.6e}")
-                print(f"  Drag Y: {results['history']['drag_y'][-1]:.6e}")
-        
-        else:
-            # Just simulate with snapshot collection
-            problem.solve()
-            problem.save_snapshots()
-    
-    else:
-        # Use basic version (exactly like original)
-        if args.no_vtk:
-            problem = CutFEMProblem(args)
-            problem.vtk_out = False
-        else:
-            problem = CutFEMProblem(args)
-        
-        problem.solve()
-    
-    problem.print_execution_time()
